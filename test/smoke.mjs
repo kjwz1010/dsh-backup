@@ -75,13 +75,12 @@ const plan = (extra) => ({
   name: '文档',
   enabled: true,
   intervalMinutes: 60,
-  format: 'copy',
+  format: 'zip',
   sources: [srcA, srcB],
   target,
   exclude: [],
   keep: 5,
   verify: true,
-  window: { enabled: false, start: '00:00', end: '23:59' },
   ...extra,
 })
 
@@ -93,47 +92,50 @@ try {
   check('首次备份成功', first.data.ok === true && first.data.run.status === 'success', JSON.stringify(first.data).slice(0, 160))
 
   const entries = await fs.readdir(target)
-  const snapDirs = entries.filter((name) => /^文档-\d{8}-\d{6}(-\d+)?$/.test(name))
-  check('复制模式按「计划名-时间戳」建目录', snapDirs.length === 1, entries.join(' , '))
+  const zips = entries.filter((name) => /^文档-\d{8}-\d{6}(-\d+)?\.zip$/.test(name))
+  check('产物是「计划名-时间戳.zip」，一次运行一个包', zips.length === 1, entries.join(' , '))
+  check('空间预检留了日志', (first.data.run.log || []).some((l) => /空间预检/.test(l.text)))
 
-  const snapDir = path.join(target, snapDirs[0] || 'missing')
-  const dirs = (await fs.readdir(snapDir).catch(() => [])).filter((name) => name.startsWith('docs'))
-  check('同名来源被区分为两个目录', dirs.length === 2, dirs.join(' , '))
+  const stageLeft = await fs.readdir(path.join(process.env.DSH_HOME, 'backup-stage')).catch(() => [])
+  check('成功后清空暂存目录', stageLeft.length === 0, stageLeft.join(' , '))
 
-  const aDir = dirs.find((name) => name.includes('-'))
-  check('重名目录带哈希后缀', Boolean(aDir) && /^docs-[0-9a-f]{6}$/.test(aDir), String(aDir))
-
-  const all = []
-  for (const dir of dirs) {
-    for (const name of await fs.readdir(path.join(snapDir, dir))) all.push(dir + '/' + name)
-  }
-  check('三个文件全部落盘', all.length === 3, all.join(' , '))
-
-  const aContent = await fs.readFile(path.join(snapDir, dirs.find((d) => d !== 'docs') || dirs[0] || 'docs', 'one.txt'), 'utf8').catch(() => '')
-  check('同名文件内容没有互相覆盖', ['A1', 'B1'].includes(aContent), aContent)
-
-  // 每次运行产出新目录，不覆盖上一次的备份
   const second = await call('POST', '/dsh-backup/run', { planId: 'p1' })
-  const afterSecond = (await fs.readdir(target)).filter((n) => /^文档-\d{8}-\d{6}(-\d+)?$/.test(n))
-  check('再次运行生成新目录且不覆盖旧备份', second.data.ok === true && afterSecond.length === 2, afterSecond.join(' , '))
+  const afterSecond = (await fs.readdir(target)).filter((n) => /^文档-\d{8}-\d{6}(-\d+)?\.zip$/.test(n))
+  check('再次运行生成新包且不覆盖旧备份', second.data.ok === true && afterSecond.length === 2, afterSecond.join(' , '))
 
-  // 旧版本残留的 .dsh-backup 会被清理
   await fs.mkdir(path.join(target, '.dsh-backup'), { recursive: true })
   await fs.writeFile(path.join(target, '.dsh-backup', 'snapshot.json'), '{}')
-  const third = await call('POST', '/dsh-backup/run', { planId: 'p1' })
-  const leftover = await fs.readdir(target)
-  check('复制模式清理残留的 .dsh-backup', !leftover.includes('.dsh-backup'), leftover.join(' , '))
-  check('每次都写全量文件', third.data.run && third.data.run.copied === 3, 'copied=' + (third.data.run && third.data.run.copied))
+  await call('POST', '/dsh-backup/run', { planId: 'p1' })
+  check('清理历史遗留的 .dsh-backup', !(await fs.readdir(target)).includes('.dsh-backup'))
 
-  // 复制模式也参与保留份数轮转
   await call('PUT', '/dsh-backup/config', { enabled: true, tickSeconds: 30, plans: [plan({ keep: 2 })] })
   const fourth = await call('POST', '/dsh-backup/run', { planId: 'p1' })
-  const afterRotate = (await fs.readdir(target)).filter((n) => /^文档-\d{8}-\d{6}(-\d+)?$/.test(n))
+  const afterRotate = (await fs.readdir(target)).filter((n) => /^文档-\d{8}-\d{6}(-\d+)?\.zip$/.test(n))
   check(
-    '复制模式按保留份数轮转',
+    '按保留份数轮转',
     afterRotate.length === 2 && (fourth.data.run.rotated || []).length >= 1,
     afterRotate.join(' , ') + ' rotated=' + JSON.stringify(fourth.data.run.rotated || []),
   )
+
+  await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    plans: [plan({ target: path.join(work, 'space'), reserveMb: 1048576 })],
+  })
+  const noSpace = await call('POST', '/dsh-backup/run', { planId: 'p1' })
+  check(
+    '空间不足时提前拒绝',
+    noSpace.data.ok === false && /空间不足/.test(String((noSpace.data.run && noSpace.data.run.error) || '')),
+    String((noSpace.data.run && noSpace.data.run.error) || '').slice(0, 60),
+  )
+
+  const legacyCopy = await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    plans: [plan({ id: 'p7', format: 'copy', sources: [srcA] })],
+  })
+  const p7 = ((legacyCopy.data.config && legacyCopy.data.config.plans) || []).find((p) => p.id === 'p7')
+  check('复制目录格式被归一化为 zip', Boolean(p7) && p7.format === 'zip', p7 && p7.format)
 
   // tar.gz：参数必须按 tar 实现动态拼接（GNU 要 --force-local，bsdtar 不能带）
   await call('PUT', '/dsh-backup/config', {

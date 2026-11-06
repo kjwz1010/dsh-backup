@@ -108,15 +108,6 @@ try {
       $rel = $_.FullName.Substring($stage.Length).TrimStart('\', '/') -replace '\\', '/'
       [void]$targets.Add([pscustomobject]@{ Source = $_.FullName; Rel = $rel })
     }
-  } else {
-    foreach ($m in $mapping) {
-      $base = Join-Path $plan.copyRoot $m.label
-      if (-not (Test-Path -LiteralPath $base)) { continue }
-      Get-ChildItem -LiteralPath $base -Recurse -File | ForEach-Object {
-        $inner = $_.FullName.Substring($base.Length).TrimStart('\', '/') -replace '\\', '/'
-        [void]$targets.Add([pscustomobject]@{ Source = $_.FullName; Rel = ($m.label + '/' + $inner) })
-      }
-    }
   }
 
   $byLabel = @{}
