@@ -4,6 +4,7 @@ import http from 'node:http'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
 const root = path.resolve(import.meta.dirname, '..')
@@ -137,10 +138,82 @@ try {
   })
   const dupRun = await call('POST', '/dsh-backup/run', { planId: 'p3' })
   check('重复来源被拒绝', dup.status === 200 && dupRun.data.ok === false, String(dupRun.data.error || '').slice(0, 60))
+  // ---------------- 恢复：在线恢复到指定目录 ----------------
+  const restoreDest = path.join(work, 'restored')
+  const r1 = await call('POST', '/dsh-backup/restore', { runId: zrun.data.run.id, dest: restoreDest })
+  const restoredOne = await fs.readFile(path.join(restoreDest, 'docs', 'one.txt'), 'utf8').catch(() => '')
+
+  check('在线恢复到指定目录', r1.data.ok === true && r1.data.restored === 1 && restoredOne === 'A1', JSON.stringify(r1.data).slice(0, 140))
+
+  // ---------------- 恢复：生成离线脚本 ----------------
+  const ex = await call('POST', '/dsh-backup/restore/export', { runId: zrun.data.run.id, mode: 'skip' })
+  const exFiles = ex.data.ok ? await fs.readdir(ex.data.dir) : []
+  check('离线恢复脚本三件套齐全', ['plan.json', 'restore.ps1', 'run.cmd'].every((f) => exFiles.includes(f)), exFiles.join(','))
+  const exPlan = ex.data.ok ? JSON.parse(await fs.readFile(path.join(ex.data.dir, 'plan.json'), 'utf8')) : {}
+  check(
+    '离线脚本记录了来源映射与备份包',
+    Array.isArray(exPlan.mapping) && exPlan.mapping[0] && exPlan.mapping[0].label === 'docs' && Boolean(exPlan.archive && exPlan.archive.path),
+    JSON.stringify(exPlan.mapping || null),
+  )
+
+  // ---------------- 恢复：被占用时按 skip 策略跳过 ----------------
+  const lockFile = path.join(srcA, 'one.txt')
+  await fs.writeFile(lockFile, 'A1')
+  const psLit = (t) => "'" + String(t).replace(/'/g, "''") + "'"
+  const locker = spawn(
+    'powershell.exe',
+    ['-NoProfile', '-Command', `$fs=[System.IO.File]::Open(${psLit(lockFile)},'Open','ReadWrite','None'); Start-Sleep -Seconds 20; $fs.Close()`],
+    { windowsHide: true },
+  )
+  await new Promise((resolve) => setTimeout(resolve, 3000))
+  const locked = await call('POST', '/dsh-backup/restore', { runId: zrun.data.run.id, mode: 'skip' })
+  check(
+    '被占用文件按 skip 策略跳过',
+    locked.data.ok === true && locked.data.restored === 0 && (locked.data.skipped || []).length === 1,
+    JSON.stringify(locked.data).slice(0, 160),
+  )
+  try { locker.kill() } catch { /* ignore */ }
+
+  // ---------------- 离线脚本端到端：删掉源文件，直接跑 restore.ps1 ----------------
+  await new Promise((resolve) => setTimeout(resolve, 1500))
+  const killTarget = path.join(srcA, 'one.txt')
+  await fs.rm(killTarget, { force: true })
+  const psRun = await new Promise((resolve) => {
+    const child = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(ex.data.dir, 'restore.ps1')],
+      { windowsHide: true },
+    )
+    let out = ''
+    child.stdout.on('data', (d) => { out += d })
+    child.stderr.on('data', (d) => { out += d })
+    child.on('close', (code) => resolve({ code, out }))
+  })
+  const back = await fs.readFile(killTarget, 'utf8').catch(() => '')
+  const psResult = JSON.parse(await fs.readFile(path.join(ex.data.dir, 'result.json'), 'utf8').catch(() => '{}'))
+  check('离线脚本真正把文件恢复回来', back === 'A1' && psResult.restored === 1, back + ' / ' + (psRun.out || '').slice(-120))
+
+  // ---------------- zip 归档必须保留来源目录结构（回归：拍平会导致同名覆盖） ----------------
+  const bothZip = await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    plans: [plan({ id: 'p4', name: '双源', format: 'zip', sources: [srcA, srcB], target: path.join(work, 'zips2') })],
+  })
+  const bz = await call('POST', '/dsh-backup/run', { planId: 'p4' })
+  const bzDest = path.join(work, 'bz')
+  const bzRestore = await call('POST', '/dsh-backup/restore', { runId: bz.data.run && bz.data.run.id, dest: bzDest })
+  const bzDirs = await fs.readdir(bzDest).catch(() => [])
+  check(
+    'zip 保留来源目录、同名文件不互相覆盖',
+    bothZip.status === 200 && bzRestore.data.ok === true && bzDirs.length === 2 && bzRestore.data.total === 3,
+    bzDirs.join(' , ') + ' total=' + (bzRestore.data.total || 0),
+  )
+
 } finally {
   await new Promise((resolve) => server.close(resolve))
-  await fs.rm(home, { recursive: true, force: true })
-  await fs.rm(work, { recursive: true, force: true })
+  // Windows 上偶发 ENOTEMPTY（杀软/索引器短暂持有），失败不影响结论
+  await fs.rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {})
+  await fs.rm(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }).catch(() => {})
 }
 
 const failed = results.filter((r) => !r.ok)
