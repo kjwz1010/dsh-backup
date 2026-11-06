@@ -159,6 +159,23 @@ try {
     Boolean(tgzRun.data.run && tgzRun.data.run.verify && tgzRun.data.run.verify.ok),
     JSON.stringify(tgzRun.data.run && tgzRun.data.run.verify),
   )
+  // 回归：包内不能出现 "." 根条目或 "./" 前缀（解压工具会显示成多余的“本地磁盘”层）
+  const runTar = (args) =>
+    new Promise((resolve) => {
+      const p = spawn('tar', args, { windowsHide: true })
+      let out = ''
+      p.stdout.on('data', (d) => (out += d))
+      p.on('close', () => resolve(out.split(/\r?\n/).filter(Boolean)))
+      p.on('error', () => resolve([]))
+    })
+  const archivePath = path.join(work, 'tgz', tgzFiles[0] || '')
+  let listed = await runTar(['--force-local', '-tzf', archivePath])
+  if (!listed.length) listed = await runTar(['-tzf', archivePath])
+  check(
+    'tar.gz 包内没有多余的点目录层',
+    listed.length > 0 && listed.every((n) => n !== '.' && !n.startsWith('./')),
+    listed.slice(0, 3).join(' | '),
+  )
 
   // 压缩模式命名
   const zipped = await call('PUT', '/dsh-backup/config', {
