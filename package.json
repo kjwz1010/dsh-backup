@@ -1,0 +1,40 @@
+{
+  "name": "dsh-backup",
+  "version": "0.1.0",
+  "description": "定时备份（dsh-backup）：可为每个备份计划单独设定间隔，多选来源目录、单选目标目录；支持压缩归档、排除规则、保留份数轮转、完整性校验、手动立即备份与运行历史。带设置页。",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "deepseek-harness",
+    "dsh-plugin",
+    "backup",
+    "scheduler",
+    "备份"
+  ],
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ],
+      "external": [
+        "react"
+      ]
+    }
+  }
+}
