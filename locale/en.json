@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Backup",
+    "description": "Back up several source directories into one target directory on a schedule, with ZIP / TAR.GZ archives, retention rotation, integrity checks and in-app restore."
+  }
+}

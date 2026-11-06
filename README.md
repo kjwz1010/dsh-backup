@@ -1,12 +1,15 @@
-# dsh-backup · 定时备份
+# 备份（dsh-backup）
 
 给 DSH 用的备份插件：在 **设置 → 备份** 里配置「多个来源目录 → 一个目标目录」，到点自动打包备份，需要时可以从任意一份备份里恢复。
+
+插件页显示的名字是 **「备份」**，来自包内 `locale/zh.json` 的 `meta.title`（英文界面显示 `Backup`）；包名和各项标识仍然是 `dsh-backup`。
 
 ## 功能
 
 - **定时备份**：每个计划单独设置间隔（5 / 15 / 30 分钟、每小时、每 3 / 6 / 12 小时、每天、每周，也可填任意分钟数）。
 - **多来源**：一个计划可以选多个来源目录，全部打进**同一个**压缩包；同名来源目录自动加路径哈希后缀（`docs-1a2b3c`），不会互相覆盖。
 - **单目标**：一个计划只写一个目标目录；目标不能等于来源，也不能落在来源内部（否则会无限复制），配置时直接拒绝。
+- **目标必填**：目标目录必须有值，而且要是完整路径（如 `D:\Backup`）；留空、只填空格、或者填 `.`、`..`、`Backup` 这类相对路径，界面当场红字拦住、后端也会拒绝——**不会**把空值悄悄当成当前目录。
 - **两种打包方式**：
   - `ZIP`：走 .NET `ZipFile.CreateFromDirectory`，保留目录结构；单包约 2GB 上限。
   - `TAR.GZ`：跨平台、无 2GB 限制；打包时按 tar 实现自动决定是否加 `--force-local`（GNU 要加，Windows 自带的 bsdtar 不认）。
@@ -83,7 +86,7 @@ config/settings.json
 ### 1. 打包件安装（推荐分发）
 
 ```bash
-dsh plugin add D:\Az\Agent\dsh-backup\dsh-backup-0.4.4.tgz --profile desktop
+dsh plugin add D:\AZ\Agent\dsh-backup\dsh-backup-0.5.9.tgz --profile desktop
 ```
 
 或在 Web 的「插件」页 / `plugin_manager` 工具里用这个 `.tgz` 路径做 `installBundle`。装完 profile 的 `package.json` 会留下对应依赖并自动写进 `dsh.profile.bundles`。
@@ -91,7 +94,7 @@ dsh plugin add D:\Az\Agent\dsh-backup\dsh-backup-0.4.4.tgz --profile desktop
 ### 2. 本地目录安装（开发用，改代码即生效）
 
 ```bash
-dsh plugin add link:D:\Az\Agent\dsh-backup --profile desktop
+dsh plugin add link:D:\AZ\Agent\dsh-backup --profile desktop
 ```
 
 ### 3. 手工安装
