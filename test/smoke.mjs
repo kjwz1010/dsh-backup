@@ -127,7 +127,7 @@ try {
   check('切换到 zip 计划', zipped.status === 200)
   const zrun = await call('POST', '/dsh-backup/run', { planId: 'p2' })
   const zipFiles = await fs.readdir(path.join(work, 'zips')).catch(() => [])
-  check('zip 包名符合「计划名-时间.zip」', /^压缩-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.zip$/.test(zipFiles[0] || ''), String(zipFiles[0]))
+  check('zip 包名符合「计划名-时间.zip」', /^压缩-\d{8}-\d{6}\.zip$/.test(zipFiles[0] || ''), String(zipFiles[0]))
   check('zip 备份成功并通过校验', zrun.data.ok === true && Boolean(zrun.data.run && zrun.data.run.verify && zrun.data.run.verify.ok))
 
   // 重复来源应当被拒绝
