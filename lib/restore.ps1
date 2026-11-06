@@ -14,7 +14,6 @@ if (-not (Test-Path -LiteralPath $PlanPath)) {
 }
 
 $plan = Get-Content -LiteralPath $PlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
-$mapping = @($plan.mapping)
 
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $stage = Join-Path $env:TEMP ('dsh-restore-' + $stamp)
@@ -106,18 +105,15 @@ try {
       [void]$targets.Add([pscustomobject]@{ Source = $_.FullName; Rel = $rel })
     }
   } else {
-    foreach ($m in $mapping) {
-      $base = Join-Path $plan.copyRoot $m.label
-      if (-not (Test-Path -LiteralPath $base)) { continue }
-      Get-ChildItem -LiteralPath $base -Recurse -File | ForEach-Object {
-        $inner = $_.FullName.Substring($base.Length).TrimStart('\', '/') -replace '\\', '/'
-        [void]$targets.Add([pscustomobject]@{ Source = $_.FullName; Rel = ($m.label + '/' + $inner) })
+    $base = [string]$plan.copyRoot
+    if (-not (Test-Path -LiteralPath $base)) { throw ('备份目录不存在：' + $base) }
+    Get-ChildItem -LiteralPath $base -Recurse -File | ForEach-Object {
+      $inner = $_.FullName.Substring($base.Length).TrimStart('\', '/') -replace '\\', '/'
+      if ($inner -notlike '.dsh-backup/*') {
+        [void]$targets.Add([pscustomobject]@{ Source = $_.FullName; Rel = $inner })
       }
     }
   }
-
-  $byLabel = @{}
-  foreach ($m in $mapping) { $byLabel[[string]$m.label] = [string]$m.source }
 
   Write-Host ''
   Write-Host ('待恢复 ' + $targets.Count + ' 个文件，占用策略：' + $mode)
@@ -128,22 +124,14 @@ try {
   foreach ($t in $targets) {
     $index = $index + 1
     $rel = [string]$t.Rel
-    $cut = $rel.IndexOf('/')
-    if ($cut -lt 0) {
-      $label = ''
-      $inner = $rel
-    } else {
-      $label = $rel.Substring(0, $cut)
-      $inner = $rel.Substring($cut + 1)
-    }
     if ($plan.dest) {
       $dest = Join-Path $plan.dest ($rel -replace '/', '\')
     } else {
-      if (-not $byLabel.ContainsKey($label)) {
+      if (-not $plan.source) {
         $summary.skipped += $rel
         continue
       }
-      $dest = Join-Path $byLabel[$label] ($inner -replace '/', '\')
+      $dest = Join-Path $plan.source ($rel -replace '/', '\')
     }
     Place $t.Source $dest $rel
     if ($index % 50 -eq 0) { Write-Host ('已处理 ' + $index + '/' + $targets.Count) }

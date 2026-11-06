@@ -20,6 +20,8 @@ await fs.mkdir(srcB, { recursive: true })
 await fs.writeFile(path.join(srcA, 'one.txt'), 'A1')
 await fs.writeFile(path.join(srcB, 'one.txt'), 'B1')
 await fs.writeFile(path.join(srcB, 'two.txt'), 'B2')
+await fs.mkdir(path.join(srcB, 'sub'), { recursive: true })
+await fs.writeFile(path.join(srcB, 'sub', 'deep.txt'), 'B3')
 
 const routes = new Map()
 const ctx = {
@@ -76,7 +78,7 @@ const plan = (extra) => ({
   enabled: true,
   intervalMinutes: 60,
   format: 'copy',
-  sources: [srcA, srcB],
+  source: srcA,
   target,
   exclude: [],
   keep: 5,
@@ -93,40 +95,29 @@ try {
   check('首次备份成功', first.data.ok === true && first.data.run.status === 'success', JSON.stringify(first.data).slice(0, 160))
 
   const entries = await fs.readdir(target)
-  const dirs = entries.filter((name) => name.startsWith('docs'))
-  check('同名来源被区分为两个目录', dirs.length === 2, dirs.join(' , '))
+  check('复制模式直接铺在目标根目录', entries.includes('one.txt'), entries.join(' , '))
 
-  const aDir = dirs.find((name) => name.includes('-'))
-  check('重名目录带哈希后缀', Boolean(aDir) && /^docs-[0-9a-f]{6}$/.test(aDir), String(aDir))
-
-  const all = []
-  for (const dir of dirs) {
-    for (const name of await fs.readdir(path.join(target, dir))) all.push(dir + '/' + name)
-  }
-  check('三个文件全部落盘', all.length === 3, all.join(' , '))
-
-  const aContent = await fs.readFile(path.join(target, dirs.find((d) => d !== 'docs') || dirs[0], 'one.txt'), 'utf8')
-  check('同名文件内容没有互相覆盖', ['A1', 'B1'].includes(aContent), aContent)
+  const aContent = await fs.readFile(path.join(target, 'one.txt'), 'utf8')
+  check('文件内容正确', aContent === 'A1', aContent)
 
   // 删掉目标文件后重跑，全量备份必须补回来（旧实现会因“大小相同”跳过）
-  const victim = path.join(target, dirs[0], 'one.txt')
+  const victim = path.join(target, 'one.txt')
   await fs.rm(victim, { force: true })
   const second = await call('POST', '/dsh-backup/run', { planId: 'p1' })
   const restored = await fs.readFile(victim, 'utf8').catch(() => '')
   check('第二次仍为全量（删掉的文件会补回）', second.data.ok === true && second.data.run.status === 'success' && restored.length > 0, restored)
 
   const third = await call('POST', '/dsh-backup/run', { planId: 'p1' })
-  check('每次都重写全部文件', third.data.run && third.data.run.copied === 3, 'copied=' + (third.data.run && third.data.run.copied))
+  check('每次都重写全部文件', third.data.run && third.data.run.copied === 1, 'copied=' + (third.data.run && third.data.run.copied))
 
   // 复制模式不再产生元数据目录（历史上会写 .dsh-backup/snapshot.json）
-  const targetEntries = await fs.readdir(path.join(work, 'out')).catch(() => [])
-  check('复制模式不生成 .dsh-backup 元数据', !targetEntries.includes('.dsh-backup'), targetEntries.join(','))
+  check('复制模式不生成 .dsh-backup 元数据', !entries.includes('.dsh-backup'), entries.join(','))
 
   // 压缩模式命名
   const zipped = await call('PUT', '/dsh-backup/config', {
     enabled: true,
     tickSeconds: 30,
-    plans: [plan({ id: 'p2', name: '压缩', format: 'zip', sources: [srcA], target: path.join(work, 'zips') })],
+    plans: [plan({ id: 'p2', name: '压缩', format: 'zip', source: srcA, target: path.join(work, 'zips') })],
   })
   check('切换到 zip 计划', zipped.status === 200)
   const zrun = await call('POST', '/dsh-backup/run', { planId: 'p2' })
@@ -134,18 +125,24 @@ try {
   check('zip 包名符合「计划名-时间.zip」', /^压缩-\d{8}-\d{6}\.zip$/.test(zipFiles[0] || ''), String(zipFiles[0]))
   check('zip 备份成功并通过校验', zrun.data.ok === true && Boolean(zrun.data.run && zrun.data.run.verify && zrun.data.run.verify.ok))
 
-  // 重复来源应当被拒绝
-  const dup = await call('PUT', '/dsh-backup/config', {
+  // v1 的多来源计划：加载时拆成多个单选计划，不丢配置
+  const legacy = await call('PUT', '/dsh-backup/config', {
     enabled: true,
     tickSeconds: 30,
-    plans: [plan({ id: 'p3', sources: [srcA, srcA.toUpperCase()] })],
+    plans: [{ ...plan({ id: 'p3' }), source: undefined, sources: [srcA, srcB] }],
   })
-  const dupRun = await call('POST', '/dsh-backup/run', { planId: 'p3' })
-  check('重复来源被拒绝', dup.status === 200 && dupRun.data.ok === false, String(dupRun.data.error || '').slice(0, 60))
+  const mgPlans = (legacy.data.config && legacy.data.config.plans) || []
+  check(
+    '多来源旧配置被拆成两个单选计划',
+    mgPlans.length === 2 &&
+      mgPlans.every((p) => typeof p.source === 'string' && p.source && !Array.isArray(p.sources)) &&
+      mgPlans.map((p) => p.name).join(',') === '文档-1,文档-2',
+    mgPlans.map((p) => p.name + ':' + p.source).join(' | '),
+  )
   // ---------------- 恢复：在线恢复到指定目录 ----------------
   const restoreDest = path.join(work, 'restored')
   const r1 = await call('POST', '/dsh-backup/restore', { runId: zrun.data.run.id, dest: restoreDest })
-  const restoredOne = await fs.readFile(path.join(restoreDest, 'docs', 'one.txt'), 'utf8').catch(() => '')
+  const restoredOne = await fs.readFile(path.join(restoreDest, 'one.txt'), 'utf8').catch(() => '')
 
   check('在线恢复到指定目录', r1.data.ok === true && r1.data.restored === 1 && restoredOne === 'A1', JSON.stringify(r1.data).slice(0, 140))
 
@@ -155,9 +152,9 @@ try {
   check('离线恢复脚本三件套齐全', ['plan.json', 'restore.ps1', 'run.cmd'].every((f) => exFiles.includes(f)), exFiles.join(','))
   const exPlan = ex.data.ok ? JSON.parse(await fs.readFile(path.join(ex.data.dir, 'plan.json'), 'utf8')) : {}
   check(
-    '离线脚本记录了来源映射与备份包',
-    Array.isArray(exPlan.mapping) && exPlan.mapping[0] && exPlan.mapping[0].label === 'docs' && Boolean(exPlan.archive && exPlan.archive.path),
-    JSON.stringify(exPlan.mapping || null),
+    '离线脚本记录了来源与备份包',
+    exPlan.source === srcA && Boolean(exPlan.archive && exPlan.archive.path),
+    JSON.stringify(exPlan.source || null),
   )
 
   // ---------------- 恢复：被占用时按 skip 策略跳过 ----------------
@@ -197,20 +194,20 @@ try {
   const psResult = JSON.parse(await fs.readFile(path.join(ex.data.dir, 'result.json'), 'utf8').catch(() => '{}'))
   check('离线脚本真正把文件恢复回来', back === 'A1' && psResult.restored === 1, back + ' / ' + (psRun.out || '').slice(-120))
 
-  // ---------------- zip 归档必须保留来源目录结构（回归：拍平会导致同名覆盖） ----------------
-  const bothZip = await call('PUT', '/dsh-backup/config', {
+  // ---------------- zip 归档必须保留子目录结构（回归：拍平会丢层级） ----------------
+  const structZip = await call('PUT', '/dsh-backup/config', {
     enabled: true,
     tickSeconds: 30,
-    plans: [plan({ id: 'p4', name: '双源', format: 'zip', sources: [srcA, srcB], target: path.join(work, 'zips2') })],
+    plans: [plan({ id: 'p4', name: '结构', format: 'zip', source: srcB, target: path.join(work, 'zips2') })],
   })
-  const bz = await call('POST', '/dsh-backup/run', { planId: 'p4' })
-  const bzDest = path.join(work, 'bz')
-  const bzRestore = await call('POST', '/dsh-backup/restore', { runId: bz.data.run && bz.data.run.id, dest: bzDest })
-  const bzDirs = await fs.readdir(bzDest).catch(() => [])
+  const sz = await call('POST', '/dsh-backup/run', { planId: 'p4' })
+  const szDest = path.join(work, 'bz')
+  const szRestore = await call('POST', '/dsh-backup/restore', { runId: sz.data.run && sz.data.run.id, dest: szDest })
+  const deep = await fs.readFile(path.join(szDest, 'sub', 'deep.txt'), 'utf8').catch(() => '')
   check(
-    'zip 保留来源目录、同名文件不互相覆盖',
-    bothZip.status === 200 && bzRestore.data.ok === true && bzDirs.length === 2 && bzRestore.data.total === 3,
-    bzDirs.join(' , ') + ' total=' + (bzRestore.data.total || 0),
+    'zip 保留子目录结构',
+    structZip.status === 200 && szRestore.data.ok === true && szRestore.data.total === 3 && deep === 'B3',
+    'total=' + (szRestore.data.total || 0) + ' deep=' + deep,
   )
 
 } finally {
