@@ -1,4 +1,4 @@
-# dsh-backup 离线恢复脚本
+﻿# dsh-backup 离线恢复脚本
 # 由 DSH 的「备份」设置页生成，运行时不依赖 DSH。
 # 用法：关闭 DSH（或退出占用目标文件的程序）后，双击同目录下的 run.cmd。
 # 脚本会等待文件锁释放后再覆盖，最多等 plan.json 里的 waitSeconds 秒。
@@ -98,7 +98,10 @@ try {
     if ($plan.archive.kind -eq 'zip') {
       Expand-Archive -LiteralPath $plan.archive.path -DestinationPath $stage -Force
     } else {
-      & tar.exe --force-local -xzf $plan.archive.path -C $stage
+      # GNU tar 需要 --force-local 才把 C:\ 当本地路径；Windows 自带的 bsdtar 不认识这个参数
+      $tarArgs = @('-xzf', $plan.archive.path, '-C', $stage)
+      if ((& tar.exe --version 2>&1 | Select-Object -First 1) -match 'GNU tar') { $tarArgs = @('--force-local') + $tarArgs }
+      & tar.exe @tarArgs
       if ($LASTEXITCODE -ne 0) { throw 'tar 解压失败' }
     }
     Get-ChildItem -LiteralPath $stage -Recurse -File | ForEach-Object {

@@ -93,7 +93,11 @@ try {
   check('首次备份成功', first.data.ok === true && first.data.run.status === 'success', JSON.stringify(first.data).slice(0, 160))
 
   const entries = await fs.readdir(target)
-  const dirs = entries.filter((name) => name.startsWith('docs'))
+  const snapDirs = entries.filter((name) => /^文档-\d{8}-\d{6}(-\d+)?$/.test(name))
+  check('复制模式按「计划名-时间戳」建目录', snapDirs.length === 1, entries.join(' , '))
+
+  const snapDir = path.join(target, snapDirs[0] || 'missing')
+  const dirs = (await fs.readdir(snapDir).catch(() => [])).filter((name) => name.startsWith('docs'))
   check('同名来源被区分为两个目录', dirs.length === 2, dirs.join(' , '))
 
   const aDir = dirs.find((name) => name.includes('-'))
@@ -101,26 +105,49 @@ try {
 
   const all = []
   for (const dir of dirs) {
-    for (const name of await fs.readdir(path.join(target, dir))) all.push(dir + '/' + name)
+    for (const name of await fs.readdir(path.join(snapDir, dir))) all.push(dir + '/' + name)
   }
   check('三个文件全部落盘', all.length === 3, all.join(' , '))
 
-  const aContent = await fs.readFile(path.join(target, dirs.find((d) => d !== 'docs') || dirs[0], 'one.txt'), 'utf8')
+  const aContent = await fs.readFile(path.join(snapDir, dirs.find((d) => d !== 'docs') || dirs[0] || 'docs', 'one.txt'), 'utf8').catch(() => '')
   check('同名文件内容没有互相覆盖', ['A1', 'B1'].includes(aContent), aContent)
 
-  // 删掉目标文件后重跑，全量备份必须补回来（旧实现会因“大小相同”跳过）
-  const victim = path.join(target, dirs[0], 'one.txt')
-  await fs.rm(victim, { force: true })
+  // 每次运行产出新目录，不覆盖上一次的备份
   const second = await call('POST', '/dsh-backup/run', { planId: 'p1' })
-  const restored = await fs.readFile(victim, 'utf8').catch(() => '')
-  check('第二次仍为全量（删掉的文件会补回）', second.data.ok === true && second.data.run.status === 'success' && restored.length > 0, restored)
+  const afterSecond = (await fs.readdir(target)).filter((n) => /^文档-\d{8}-\d{6}(-\d+)?$/.test(n))
+  check('再次运行生成新目录且不覆盖旧备份', second.data.ok === true && afterSecond.length === 2, afterSecond.join(' , '))
 
+  // 旧版本残留的 .dsh-backup 会被清理
+  await fs.mkdir(path.join(target, '.dsh-backup'), { recursive: true })
+  await fs.writeFile(path.join(target, '.dsh-backup', 'snapshot.json'), '{}')
   const third = await call('POST', '/dsh-backup/run', { planId: 'p1' })
-  check('每次都重写全部文件', third.data.run && third.data.run.copied === 3, 'copied=' + (third.data.run && third.data.run.copied))
+  const leftover = await fs.readdir(target)
+  check('复制模式清理残留的 .dsh-backup', !leftover.includes('.dsh-backup'), leftover.join(' , '))
+  check('每次都写全量文件', third.data.run && third.data.run.copied === 3, 'copied=' + (third.data.run && third.data.run.copied))
 
-  // 复制模式不再产生元数据目录（历史上会写 .dsh-backup/snapshot.json）
-  const targetEntries = await fs.readdir(path.join(work, 'out')).catch(() => [])
-  check('复制模式不生成 .dsh-backup 元数据', !targetEntries.includes('.dsh-backup'), targetEntries.join(','))
+  // 复制模式也参与保留份数轮转
+  await call('PUT', '/dsh-backup/config', { enabled: true, tickSeconds: 30, plans: [plan({ keep: 2 })] })
+  const fourth = await call('POST', '/dsh-backup/run', { planId: 'p1' })
+  const afterRotate = (await fs.readdir(target)).filter((n) => /^文档-\d{8}-\d{6}(-\d+)?$/.test(n))
+  check(
+    '复制模式按保留份数轮转',
+    afterRotate.length === 2 && (fourth.data.run.rotated || []).length >= 1,
+    afterRotate.join(' , ') + ' rotated=' + JSON.stringify(fourth.data.run.rotated || []),
+  )
+
+  // tar.gz：参数必须按 tar 实现动态拼接（GNU 要 --force-local，bsdtar 不能带）
+  await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    plans: [plan({ id: 'p6', name: '打包', format: 'tar.gz', sources: [srcA], target: path.join(work, 'tgz') })],
+  })
+  const tgzRun = await call('POST', '/dsh-backup/run', { planId: 'p6' })
+  const tgzFiles = await fs.readdir(path.join(work, 'tgz')).catch(() => [])
+  check(
+    'tar.gz 备份成功且命名正确',
+    tgzRun.data.ok === true && /^打包-\d{8}-\d{6}\.tar\.gz$/.test(tgzFiles[0] || ''),
+    String(tgzFiles[0]) + ' ' + String(tgzRun.data.error || ''),
+  )
 
   // 压缩模式命名
   const zipped = await call('PUT', '/dsh-backup/config', {
