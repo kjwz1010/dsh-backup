@@ -197,7 +197,16 @@ try {
   const psResult = JSON.parse(await fs.readFile(path.join(ex.data.dir, 'result.json'), 'utf8').catch(() => '{}'))
   check('离线脚本真正把文件恢复回来', back === 'A1' && psResult.restored === 1, back + ' / ' + (psRun.out || '').slice(-120))
 
-  // ---------------- zip 归档必须保留来源目录结构（回归：拍平会导致同名覆盖） ----------------
+  // ---------------- 0.3.0 写出的单选配置（plan.source）必须能继续读入 ----------------
+  const legacySingle = await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    plans: [{ id: 'p5', name: '旧单选', source: srcA, target: path.join(work, 'legacy'), format: 'copy', sources: undefined }],
+  })
+  const lg = legacySingle.data.config.plans.find((p) => p.id === 'p5')
+  check('旧的单选 plan.source 配置被读成单元素 sources', Boolean(lg) && Array.isArray(lg.sources) && lg.sources.length === 1, JSON.stringify(lg && lg.sources))
+
+
   const bothZip = await call('PUT', '/dsh-backup/config', {
     enabled: true,
     tickSeconds: 30,
