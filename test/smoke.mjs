@@ -287,6 +287,36 @@ try {
     lg ? JSON.stringify(lg.exclude) : 'null',
   )
 
+  // ---------------- 排除规则：#名字段匹配 + 多级路径 + 分隔符归一 ----------------
+  const exclSrc = path.join(work, 'excl', 'proj')
+  await fs.mkdir(path.join(exclSrc, 'src', 'cache'), { recursive: true })
+  await fs.mkdir(path.join(exclSrc, '.git', 'objects'), { recursive: true })
+  await fs.writeFile(path.join(exclSrc, 'src', 'cache', 'a.bin'), 'C1')
+  await fs.writeFile(path.join(exclSrc, '.git', 'objects', 'o.bin'), 'G1')
+  await fs.writeFile(path.join(exclSrc, '.gitignore'), 'I1')
+  await fs.writeFile(path.join(exclSrc, 'app.log'), 'L1')
+  await fs.writeFile(path.join(exclSrc, 'keep.txt'), 'K1')
+  await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    plans: [
+      plan({
+        id: 'p7',
+        name: '排除',
+        format: 'zip',
+        sources: [exclSrc],
+        target: path.join(work, 'excl-out'),
+        exclude: ['.git', '*.log', 'src/cache'],
+      }),
+    ],
+  })
+  const exRun = await startRun('p7')
+  check(
+    '排除规则按名字与多级路径生效，.gitignore 不被 .git 误伤',
+    exRun.data.run && exRun.data.run.files === 2 && exRun.data.run.status === 'success',
+    JSON.stringify({ files: exRun.data.run && exRun.data.run.files, status: exRun.data.run && exRun.data.run.status }),
+  )
+
 
   const bothZip = await call('PUT', '/dsh-backup/config', {
     enabled: true,
