@@ -293,7 +293,7 @@ try {
     bzDirs.join(' , ') + ' total=' + (bzRestore.data.total || 0),
   )
 
-  // 失败时不能删暂存目录，否则断点续传永远失效（目标位置放一个同名普通文件制造 mkdir 失败）
+  // 备份结束（无论成功失败）都要清空暂存，不留临时文件
   const blocker = path.join(work, 'blocker')
   await fs.writeFile(blocker, 'x')
   await call('PUT', '/dsh-backup/config', {
@@ -304,8 +304,8 @@ try {
   const failedRun = await startRun('p8')
   const keptStage = await fs.readdir(path.join(process.env.DSH_HOME, 'backup-stage', 'p8')).catch(() => [])
   check(
-    '失败时保留暂存目录以便下次续传',
-    failedRun.data.ok === false && keptStage.length > 0,
+    '失败后暂存目录也被清空',
+    failedRun.data.ok === false && keptStage.length === 0,
     String(keptStage.length) + ' ' + String(failedRun.data.run && failedRun.data.run.error),
   )
 
@@ -322,24 +322,15 @@ try {
     staged.status === 200 && staged.data.config && staged.data.config.stageRoot === customStage,
     String(staged.data.config && staged.data.config.stageRoot),
   )
+  // 暂存目录可以换到别处；备份时用这里暂存，结束后自动清空（不需要手动清理按钮）
   await fs.mkdir(path.join(customStage, 'p9'), { recursive: true })
   await fs.writeFile(path.join(customStage, 'p9', 'leftover.bin'), 'x'.repeat(4096))
-  const cleanRes = await call('POST', '/dsh-backup/stage/clean', {})
-  const afterClean = await fs.readdir(customStage).catch(() => [])
+  await startRun('p9')
+  const afterRun = await fs.readdir(customStage).catch(() => [])
   check(
-    '清理暂存释放空间',
-    cleanRes.data.ok === true && afterClean.length === 0,
-    JSON.stringify({ freed: cleanRes.data.freed, left: afterClean }),
-  )
-  // 目录里混入非暂存内容时必须拒绝，避免把用户数据当暂存删掉
-  await fs.mkdir(path.join(customStage, 'pictures'), { recursive: true })
-  await fs.writeFile(path.join(customStage, 'pictures', 'me.jpg'), 'x')
-  const dirty = await call('POST', '/dsh-backup/stage/clean', {})
-  const stillThere = await fs.readdir(customStage).catch(() => [])
-  check(
-    '目录里混有用户文件时清理被拒绝',
-    dirty.status === 400 && dirty.data.ok === false && stillThere.includes('pictures'),
-    JSON.stringify({ status: dirty.status, left: stillThere }),
+    '备份结束后自动清空暂存（含上次残留）',
+    afterRun.length === 0,
+    JSON.stringify(afterRun),
   )
   await fs.rm(customStage, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
   const risky = await call('PUT', '/dsh-backup/config', {
