@@ -276,6 +276,11 @@ try {
   })
   const lg = legacySingle.data.config.plans.find((p) => p.id === 'p5')
   check('旧的单选 plan.source 配置被读成单元素 sources', Boolean(lg) && Array.isArray(lg.sources) && lg.sources.length === 1, JSON.stringify(lg && lg.sources))
+  check(
+    '缺字段的间隔与保留份数用明确默认（60 分钟 / 1 份）',
+    Boolean(lg) && lg.intervalMinutes === 60 && lg.keep === 1,
+    lg ? `interval=${lg.intervalMinutes} keep=${lg.keep}` : 'null',
+  )
 
 
   const bothZip = await call('PUT', '/dsh-backup/config', {
