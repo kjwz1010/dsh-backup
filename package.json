@@ -1,7 +1,7 @@
 {
   "name": "dsh-backup",
-  "version": "0.3.0",
-  "description": "DSH 定时备份插件：一个来源目录全量备份到一个目标目录，支持复制/ZIP/TAR.GZ、轮转、恢复与离线恢复脚本",
+  "version": "0.2.2",
+  "description": "定时备份（dsh-backup）：每个计划独立间隔，多选来源目录、单选目标目录；支持复制/zip/tar.gz、排除规则、保留份数轮转、完整性校验、运行历史，以及在线恢复与「离线恢复脚本」（关掉 DSH 后双击运行，等文件锁释放再覆盖）。带设置页。",
   "license": "MIT",
   "type": "module",
   "keywords": [
