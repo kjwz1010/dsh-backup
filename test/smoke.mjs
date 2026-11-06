@@ -345,6 +345,32 @@ try {
     String(risky.data.config.stageRoot),
   )
 
+  // 暂存目录与来源目录互相嵌套必须被拒（否则备份会把自己打进去，或清理时删掉来源）
+  await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    stageRoot: path.join(work, 'a', 'docs', '.stage'),
+    plans: [plan({ id: 'p10', name: '嵌套暂存', format: 'zip', sources: [srcA], target: path.join(work, 'nest') })],
+  })
+  const nestedRun = await call('POST', '/dsh-backup/run', { planId: 'p10' })
+  check(
+    '暂存目录位于来源内部时拒绝运行',
+    nestedRun.data.ok === false && /暂存目录不能位于来源目录内部/.test(String(nestedRun.data.error || '')),
+    String(nestedRun.data.error || ''),
+  )
+  await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    stageRoot: path.join(work, 'a', 'docs'),
+    plans: [plan({ id: 'p11', name: '来源在暂存内', format: 'zip', sources: [path.join(work, 'a', 'docs', 'sub')], target: path.join(work, 'nest2') })],
+  })
+  const insideRun = await call('POST', '/dsh-backup/run', { planId: 'p11' })
+  check(
+    '来源目录位于暂存目录内部时拒绝运行',
+    insideRun.data.ok === false && /来源目录不能位于暂存目录内部/.test(String(insideRun.data.error || '')),
+    String(insideRun.data.error || ''),
+  )
+
   // 立即备份必须立刻返回“已开始”，而不是等备份跑完（关掉设置页不影响后台任务）
   await call('PUT', '/dsh-backup/config', {
     enabled: true,
