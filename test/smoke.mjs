@@ -352,11 +352,19 @@ try {
     stageRoot: path.join(work, 'a', 'docs', '.stage'),
     plans: [plan({ id: 'p10', name: '嵌套暂存', format: 'zip', sources: [srcA], target: path.join(work, 'nest') })],
   })
-  const nestedRun = await call('POST', '/dsh-backup/run', { planId: 'p10' })
+  // 暂存在来源内部（例如来源是 ~/.dsh、暂存在 ~/.dsh/backup-stage）是允许的：
+  // 扫描会跳过暂存目录，这里预先塞一个残留文件验证它进不了包。
+  await fs.mkdir(path.join(work, 'a', 'docs', '.stage', 'p10'), { recursive: true })
+  await fs.writeFile(path.join(work, 'a', 'docs', '.stage', 'p10', 'leftover.bin'), 'x'.repeat(2048))
+  const nestedRun = await startRun('p10')
+  // 只备份了 one.txt（2 字节）；若 .stage 里的 2KB 残留被扫进去，bytes 会明显变大
   check(
-    '暂存目录位于来源内部时拒绝运行',
-    nestedRun.data.ok === false && /暂存目录不能位于来源目录内部/.test(String(nestedRun.data.error || '')),
-    String(nestedRun.data.error || ''),
+    '暂存目录位于来源内部时照常备份且跳过暂存内容',
+    nestedRun.data.ok === true
+      && nestedRun.data.run
+      && nestedRun.data.run.status === 'success'
+      && nestedRun.data.run.bytes === 2,
+    'bytes=' + (nestedRun.data.run && nestedRun.data.run.bytes) + ' status=' + (nestedRun.data.run && nestedRun.data.run.status),
   )
   await call('PUT', '/dsh-backup/config', {
     enabled: true,
