@@ -84,11 +84,27 @@ const plan = (extra) => ({
   ...extra,
 })
 
+// 备份改成了后台执行：POST 只返回“已开始”，这里等它跑完再从历史里取结果，
+// 保持与旧的同步返回同形状，断言不用改。
+async function startRun(planId) {
+  const res = await call('POST', '/dsh-backup/run', { planId })
+  if (!res.data || !res.data.ok) return res
+  for (let i = 0; i < 2000; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const prog = await call('GET', '/dsh-backup/progress')
+    if (!prog.data || !prog.data.running) break
+  }
+  const hist = await call('GET', '/dsh-backup/history')
+  const run = (hist.data.runs || []).find((item) => item.planId === planId)
+  const ok = Boolean(run && run.status === 'success')
+  return { status: ok ? 200 : 400, data: { ok, run: run || null, error: (run && run.error) || '' } }
+}
+
 try {
   const saved = await call('PUT', '/dsh-backup/config', { enabled: true, tickSeconds: 30, plans: [plan()] })
   check('写入配置', saved.status === 200 && saved.data.ok !== false)
 
-  const first = await call('POST', '/dsh-backup/run', { planId: 'p1' })
+  const first = await startRun('p1')
   check('首次备份成功', first.data.ok === true && first.data.run.status === 'success', JSON.stringify(first.data).slice(0, 160))
 
   const entries = await fs.readdir(target)
@@ -99,17 +115,17 @@ try {
   const stageLeft = await fs.readdir(path.join(process.env.DSH_HOME, 'backup-stage')).catch(() => [])
   check('成功后清空暂存目录', stageLeft.length === 0, stageLeft.join(' , '))
 
-  const second = await call('POST', '/dsh-backup/run', { planId: 'p1' })
+  const second = await startRun('p1')
   const afterSecond = (await fs.readdir(target)).filter((n) => /^文档-\d{8}-\d{6}(-\d+)?\.zip$/.test(n))
   check('再次运行生成新包且不覆盖旧备份', second.data.ok === true && afterSecond.length === 2, afterSecond.join(' , '))
 
   await fs.mkdir(path.join(target, '.dsh-backup'), { recursive: true })
   await fs.writeFile(path.join(target, '.dsh-backup', 'snapshot.json'), '{}')
-  await call('POST', '/dsh-backup/run', { planId: 'p1' })
+  await startRun('p1')
   check('清理历史遗留的 .dsh-backup', !(await fs.readdir(target)).includes('.dsh-backup'))
 
   await call('PUT', '/dsh-backup/config', { enabled: true, tickSeconds: 30, plans: [plan({ keep: 2 })] })
-  const fourth = await call('POST', '/dsh-backup/run', { planId: 'p1' })
+  const fourth = await startRun('p1')
   const afterRotate = (await fs.readdir(target)).filter((n) => /^文档-\d{8}-\d{6}(-\d+)?\.zip$/.test(n))
   check(
     '按保留份数轮转',
@@ -122,7 +138,7 @@ try {
     tickSeconds: 30,
     plans: [plan({ target: path.join(work, 'space'), reserveMb: 1048576 })],
   })
-  const noSpace = await call('POST', '/dsh-backup/run', { planId: 'p1' })
+  const noSpace = await startRun('p1')
   check(
     '空间不足时提前拒绝',
     noSpace.data.ok === false && /空间不足/.test(String((noSpace.data.run && noSpace.data.run.error) || '')),
@@ -147,7 +163,7 @@ try {
     tickSeconds: 30,
     plans: [plan({ id: 'p6', name: '打包', format: 'tar.gz', sources: [srcA, srcU], target: path.join(work, 'tgz') })],
   })
-  const tgzRun = await call('POST', '/dsh-backup/run', { planId: 'p6' })
+  const tgzRun = await startRun('p6')
   const tgzFiles = await fs.readdir(path.join(work, 'tgz')).catch(() => [])
   check(
     'tar.gz 备份成功且命名正确',
@@ -184,7 +200,7 @@ try {
     plans: [plan({ id: 'p2', name: '压缩', format: 'zip', sources: [srcA], target: path.join(work, 'zips') })],
   })
   check('切换到 zip 计划', zipped.status === 200)
-  const zrun = await call('POST', '/dsh-backup/run', { planId: 'p2' })
+  const zrun = await startRun('p2')
   const zipFiles = await fs.readdir(path.join(work, 'zips')).catch(() => [])
   check('zip 包名符合「计划名-时间.zip」', /^压缩-\d{8}-\d{6}\.zip$/.test(zipFiles[0] || ''), String(zipFiles[0]))
   check('zip 备份成功并通过校验', zrun.data.ok === true && Boolean(zrun.data.run && zrun.data.run.verify && zrun.data.run.verify.ok))
@@ -195,7 +211,7 @@ try {
     tickSeconds: 30,
     plans: [plan({ id: 'p3', sources: [srcA, srcA.toUpperCase()] })],
   })
-  const dupRun = await call('POST', '/dsh-backup/run', { planId: 'p3' })
+  const dupRun = await startRun('p3')
   check('重复来源被拒绝', dup.status === 200 && dupRun.data.ok === false, String(dupRun.data.error || '').slice(0, 60))
   // ---------------- 恢复：在线恢复到指定目录 ----------------
   const restoreDest = path.join(work, 'restored')
@@ -267,7 +283,7 @@ try {
     tickSeconds: 30,
     plans: [plan({ id: 'p4', name: '双源', format: 'zip', sources: [srcA, srcB], target: path.join(work, 'zips2') })],
   })
-  const bz = await call('POST', '/dsh-backup/run', { planId: 'p4' })
+  const bz = await startRun('p4')
   const bzDest = path.join(work, 'bz')
   const bzRestore = await call('POST', '/dsh-backup/restore', { runId: bz.data.run && bz.data.run.id, dest: bzDest })
   const bzDirs = await fs.readdir(bzDest).catch(() => [])
@@ -285,12 +301,31 @@ try {
     tickSeconds: 30,
     plans: [plan({ id: 'p8', name: '续传', format: 'zip', sources: [srcA], target: blocker })],
   })
-  const failedRun = await call('POST', '/dsh-backup/run', { planId: 'p8' })
+  const failedRun = await startRun('p8')
   const keptStage = await fs.readdir(path.join(process.env.DSH_HOME, 'backup-stage', 'p8')).catch(() => [])
   check(
     '失败时保留暂存目录以便下次续传',
     failedRun.data.ok === false && keptStage.length > 0,
     String(keptStage.length) + ' ' + String(failedRun.data.run && failedRun.data.run.error),
+  )
+
+  // 立即备份必须立刻返回“已开始”，而不是等备份跑完（关掉设置页不影响后台任务）
+  const kicked = await call('POST', '/dsh-backup/run', { planId: 'p8' })
+  check(
+    '立即备份接口立刻返回“已开始”',
+    kicked.status === 202 && kicked.data.started === true,
+    JSON.stringify(kicked.data).slice(0, 120),
+  )
+  for (let i = 0; i < 600; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    const prog = await call('GET', '/dsh-backup/progress')
+    if (!prog.data || !prog.data.running) break
+  }
+  const idleStop = await call('POST', '/dsh-backup/stop', {})
+  check(
+    '空闲时停止接口直接返回',
+    idleStop.data.ok === true && idleStop.data.running === false,
+    JSON.stringify(idleStop.data).slice(0, 120),
   )
 
 } finally {
