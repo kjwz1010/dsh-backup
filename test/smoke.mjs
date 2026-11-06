@@ -118,6 +118,10 @@ try {
   const third = await call('POST', '/dsh-backup/run', { planId: 'p1' })
   check('每次都重写全部文件', third.data.run && third.data.run.copied === 3, 'copied=' + (third.data.run && third.data.run.copied))
 
+  // 复制模式不再产生元数据目录（历史上会写 .dsh-backup/snapshot.json）
+  const targetEntries = await fs.readdir(path.join(work, 'out')).catch(() => [])
+  check('复制模式不生成 .dsh-backup 元数据', !targetEntries.includes('.dsh-backup'), targetEntries.join(','))
+
   // 压缩模式命名
   const zipped = await call('PUT', '/dsh-backup/config', {
     enabled: true,
