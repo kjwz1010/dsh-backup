@@ -281,6 +281,11 @@ try {
     Boolean(lg) && lg.intervalMinutes === 1440 && lg.keep === 7,
     lg ? `interval=${lg.intervalMinutes} keep=${lg.keep}` : 'null',
   )
+  check(
+    '缺字段的排除规则默认为空（不排除任何文件）',
+    Boolean(lg) && Array.isArray(lg.exclude) && lg.exclude.length === 0,
+    lg ? JSON.stringify(lg.exclude) : 'null',
+  )
 
 
   const bothZip = await call('PUT', '/dsh-backup/config', {
