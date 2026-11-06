@@ -86,7 +86,7 @@ config/settings.json
 ### 1. 打包件安装（推荐分发）
 
 ```bash
-dsh plugin add D:\AZ\Agent\dsh-backup\dsh-backup-0.5.9.tgz --profile desktop
+dsh plugin add D:\AZ\Agent\plugins\dsh-backup\dsh-backup-0.5.9.tgz --profile desktop
 ```
 
 或在 Web 的「插件」页 / `plugin_manager` 工具里用这个 `.tgz` 路径做 `installBundle`。装完 profile 的 `package.json` 会留下对应依赖并自动写进 `dsh.profile.bundles`。
@@ -94,7 +94,7 @@ dsh plugin add D:\AZ\Agent\dsh-backup\dsh-backup-0.5.9.tgz --profile desktop
 ### 2. 本地目录安装（开发用，改代码即生效）
 
 ```bash
-dsh plugin add link:D:\AZ\Agent\dsh-backup --profile desktop
+dsh plugin add link:D:\AZ\Agent\plugins\dsh-backup --profile desktop
 ```
 
 ### 3. 手工安装
