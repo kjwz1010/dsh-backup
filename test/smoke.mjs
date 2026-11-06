@@ -322,8 +322,8 @@ try {
     staged.status === 200 && staged.data.config && staged.data.config.stageRoot === customStage,
     String(staged.data.config && staged.data.config.stageRoot),
   )
-  await fs.mkdir(customStage, { recursive: true })
-  await fs.writeFile(path.join(customStage, 'junk.bin'), 'x'.repeat(4096))
+  await fs.mkdir(path.join(customStage, 'p9'), { recursive: true })
+  await fs.writeFile(path.join(customStage, 'p9', 'leftover.bin'), 'x'.repeat(4096))
   const cleanRes = await call('POST', '/dsh-backup/stage/clean', {})
   const afterClean = await fs.readdir(customStage).catch(() => [])
   check(
@@ -331,15 +331,26 @@ try {
     cleanRes.data.ok === true && afterClean.length === 0,
     JSON.stringify({ freed: cleanRes.data.freed, left: afterClean }),
   )
+  // 目录里混入非暂存内容时必须拒绝，避免把用户数据当暂存删掉
+  await fs.mkdir(path.join(customStage, 'pictures'), { recursive: true })
+  await fs.writeFile(path.join(customStage, 'pictures', 'me.jpg'), 'x')
+  const dirty = await call('POST', '/dsh-backup/stage/clean', {})
+  const stillThere = await fs.readdir(customStage).catch(() => [])
+  check(
+    '目录里混有用户文件时清理被拒绝',
+    dirty.status === 400 && dirty.data.ok === false && stillThere.includes('pictures'),
+    JSON.stringify({ status: dirty.status, left: stillThere }),
+  )
+  await fs.rm(customStage, { recursive: true, force: true, maxRetries: 3 }).catch(() => {})
   const risky = await call('PUT', '/dsh-backup/config', {
     enabled: true,
     tickSeconds: 30,
-    stageRoot: 'D:\\',
+    stageRoot: 'C:\\Users',
     plans: [plan({ id: 'p9', name: '暂存可配', format: 'zip', sources: [srcA], target: path.join(work, 'stg') })],
   })
   check(
-    '盘符根目录不会被当成暂存目录',
-    risky.status === 200 && risky.data.config.stageRoot !== 'D:\\' && risky.data.config.stageRoot !== 'D:/',
+    '用户目录的上级目录不会被当成暂存目录',
+    risky.status === 200 && risky.data.config.stageRoot !== 'C:\\Users',
     String(risky.data.config.stageRoot),
   )
 
