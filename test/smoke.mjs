@@ -138,10 +138,14 @@ try {
   check('复制目录格式被归一化为 zip', Boolean(p7) && p7.format === 'zip', p7 && p7.format)
 
   // tar.gz：参数必须按 tar 实现动态拼接（GNU 要 --force-local，bsdtar 不能带）
+  // 回归：中文文件名不能走 -T 清单，bsdtar 会按系统 ANSI 码页解析成空串
+  const srcU = path.join(work, 'a', '中文目录')
+  await fs.mkdir(srcU, { recursive: true })
+  await fs.writeFile(path.join(srcU, '词典-来源.txt'), 'U1')
   await call('PUT', '/dsh-backup/config', {
     enabled: true,
     tickSeconds: 30,
-    plans: [plan({ id: 'p6', name: '打包', format: 'tar.gz', sources: [srcA], target: path.join(work, 'tgz') })],
+    plans: [plan({ id: 'p6', name: '打包', format: 'tar.gz', sources: [srcA, srcU], target: path.join(work, 'tgz') })],
   })
   const tgzRun = await call('POST', '/dsh-backup/run', { planId: 'p6' })
   const tgzFiles = await fs.readdir(path.join(work, 'tgz')).catch(() => [])
@@ -149,6 +153,11 @@ try {
     'tar.gz 备份成功且命名正确',
     tgzRun.data.ok === true && /^打包-\d{8}-\d{6}\.tar\.gz$/.test(tgzFiles[0] || ''),
     String(tgzFiles[0]) + ' ' + String(tgzRun.data.error || ''),
+  )
+  check(
+    'tar.gz 含中文文件名也能打包并通过校验',
+    Boolean(tgzRun.data.run && tgzRun.data.run.verify && tgzRun.data.run.verify.ok),
+    JSON.stringify(tgzRun.data.run && tgzRun.data.run.verify),
   )
 
   // 压缩模式命名
@@ -249,6 +258,22 @@ try {
     'zip 保留来源目录、同名文件不互相覆盖',
     bothZip.status === 200 && bzRestore.data.ok === true && bzDirs.length === 2 && bzRestore.data.total === 3,
     bzDirs.join(' , ') + ' total=' + (bzRestore.data.total || 0),
+  )
+
+  // 失败时不能删暂存目录，否则断点续传永远失效（目标位置放一个同名普通文件制造 mkdir 失败）
+  const blocker = path.join(work, 'blocker')
+  await fs.writeFile(blocker, 'x')
+  await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    plans: [plan({ id: 'p8', name: '续传', format: 'zip', sources: [srcA], target: blocker })],
+  })
+  const failedRun = await call('POST', '/dsh-backup/run', { planId: 'p8' })
+  const keptStage = await fs.readdir(path.join(process.env.DSH_HOME, 'backup-stage', 'p8')).catch(() => [])
+  check(
+    '失败时保留暂存目录以便下次续传',
+    failedRun.data.ok === false && keptStage.length > 0,
+    String(keptStage.length) + ' ' + String(failedRun.data.run && failedRun.data.run.error),
   )
 
 } finally {
