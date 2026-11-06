@@ -309,7 +309,46 @@ try {
     String(keptStage.length) + ' ' + String(failedRun.data.run && failedRun.data.run.error),
   )
 
+  // ---------------- 暂存目录可配置 + 一键清理 ----------------
+  const customStage = path.join(work, 'mystage')
+  const staged = await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    stageRoot: customStage,
+    plans: [plan({ id: 'p9', name: '暂存可配', format: 'zip', sources: [srcA], target: path.join(work, 'stg') })],
+  })
+  check(
+    '暂存目录可配置并持久化',
+    staged.status === 200 && staged.data.config && staged.data.config.stageRoot === customStage,
+    String(staged.data.config && staged.data.config.stageRoot),
+  )
+  await fs.mkdir(customStage, { recursive: true })
+  await fs.writeFile(path.join(customStage, 'junk.bin'), 'x'.repeat(4096))
+  const cleanRes = await call('POST', '/dsh-backup/stage/clean', {})
+  const afterClean = await fs.readdir(customStage).catch(() => [])
+  check(
+    '清理暂存释放空间',
+    cleanRes.data.ok === true && afterClean.length === 0,
+    JSON.stringify({ freed: cleanRes.data.freed, left: afterClean }),
+  )
+  const risky = await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    stageRoot: 'D:\\',
+    plans: [plan({ id: 'p9', name: '暂存可配', format: 'zip', sources: [srcA], target: path.join(work, 'stg') })],
+  })
+  check(
+    '盘符根目录不会被当成暂存目录',
+    risky.status === 200 && risky.data.config.stageRoot !== 'D:\\' && risky.data.config.stageRoot !== 'D:/',
+    String(risky.data.config.stageRoot),
+  )
+
   // 立即备份必须立刻返回“已开始”，而不是等备份跑完（关掉设置页不影响后台任务）
+  await call('PUT', '/dsh-backup/config', {
+    enabled: true,
+    tickSeconds: 30,
+    plans: [plan({ id: 'p8', name: '续传', format: 'zip', sources: [srcA], target: blocker })],
+  })
   const kicked = await call('POST', '/dsh-backup/run', { planId: 'p8' })
   check(
     '立即备份接口立刻返回“已开始”',

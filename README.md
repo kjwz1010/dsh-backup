@@ -15,7 +15,7 @@
 - **完整性校验**：打完立刻回读压缩包，ZIP 数条目、TAR 列清单，条目为 0 视为失败。
 - **排除规则**：逗号分隔，`*` 通配，按路径片段匹配；新建计划默认排除 `.git`，可自行增删。
 - **空间预检**：开跑前估算 `来源体积 × 1.05 + 1MB + 计划里的「预留 MB」`，目标剩余空间不足就直接拒绝，不会跑到一半把磁盘写满。
-- **断点续传**：暂存目录按计划固定在 `~/.dsh/backup-stage/<计划 id>`；失败的运行保留暂存，下次运行按「大小 + mtime」跳过已拷文件，成功后才清理。
+- **断点续传**：暂存目录按计划固定为 `<暂存目录>/<计划 id>`；失败的运行保留暂存，下次运行按「大小 + mtime」跳过已拷文件，成功后才清理。暂存根目录可在设置页修改（默认 `~/.dsh/backup-stage`），并带「清理暂存」按钮查看/释放占用。
 - **失败重试**：文件复制遇到 `EBUSY` / `EPERM` / `ETIMEDOUT` / `ECONNRESET` 等瞬时错误自动重试 3 次（400ms、1600ms 退避）。
 - **手动备份**：随时点「立即备份」，不受调度影响；运行中可以「停止」。备份在后台执行，**关掉设置页或 DSH 窗口都不会中断**。
 - **进度与历史**：备份时能看到已暂存文件数；历史记录保留最近 100 条（时间、结果、大小、耗时、逐条日志）。
@@ -122,7 +122,7 @@ curl http://127.0.0.1:<端口>/dsh-backup
 | --- | --- |
 | 配置 | `~/.dsh/backup.json` |
 | 运行历史 | `~/.dsh/backup-state.json`（最近 100 条） |
-| 暂存目录 | `~/.dsh/backup-stage/<计划 id>/` + `<计划 id>.json` |
+| 暂存目录 | `<暂存根目录>/<计划 id>/` + `<计划 id>.json`，根目录默认 `~/.dsh/backup-stage`，可在设置页改 |
 | 恢复撤销副本 | `~/.dsh/restore-undo/<时间戳>/` |
 | 离线恢复脚本 | `~/.dsh/backup-restore/<runId>-<时间戳>/` |
 
@@ -136,6 +136,7 @@ curl http://127.0.0.1:<端口>/dsh-backup
 | PUT | `/dsh-backup/config` | 整份写配置 |
 | POST | `/dsh-backup/run` | 启动一次备份，立刻返回 `202 {started:true}`，结果看 `/progress` 与 `/history` |
 | POST | `/dsh-backup/stop` | 请求停止（在处理完当前文件后中断） |
+| POST | `/dsh-backup/stage/clean` | 清理暂存目录（备份执行中会被拒绝），返回释放字节数 |
 | GET | `/dsh-backup/progress` | 备份进度 |
 | GET | `/dsh-backup/history` | 历史 |
 | POST | `/dsh-backup/history/clear` | 清空历史 |
