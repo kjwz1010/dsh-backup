@@ -443,6 +443,60 @@ try {
     JSON.stringify(idleStop.data).slice(0, 120),
   )
 
+  // ---------------- 回归：进程被中断留下的「进行中」记录不再永久挡住备份 ----------------
+  // 场景：备份跑到一半 DSH 退出/被强杀，finally 里的收尾来不及执行，磁盘上留下一条
+  // status=running 的僵尸记录。旧实现里这条记录会让之后每一次触发都直接返回
+  // 「已有备份任务在执行」，定时备份从此再也不跑，界面上只有一条永远「进行中」。
+  const stateFile = path.join(process.env.DSH_HOME, 'backup-state.json')
+  const zombie = {
+    id: 'pzombie',
+    planId: 'p12',
+    planName: '僵尸',
+    trigger: 'scheduled',
+    status: 'running',
+    startedAt: '2026-01-01T00:00:00.000Z',
+    finishedAt: null,
+    durationMs: null,
+    files: 0,
+    bytes: 0,
+    copied: 0,
+    archive: null,
+    verify: null,
+    rotated: [],
+    error: null,
+    target: path.join(work, 'zombie'),
+    sources: [srcA],
+    labels: [{ label: 'docs', source: srcA }],
+    log: [],
+  }
+  const zombieState = () => fs.mkdir(path.dirname(stateFile), { recursive: true }).then(() =>
+    fs.writeFile(stateFile, JSON.stringify({ runs: [zombie], lastRunAt: {}, nextRunAt: {} })),
+  )
+  // 关掉调度，避免 tick 和手动触发抢同一把锁把断言弄成随机结果
+  await call('PUT', '/dsh-backup/config', {
+    enabled: false,
+    tickSeconds: 3600,
+    plans: [plan({ id: 'p12', name: '僵尸恢复', format: 'zip', sources: [srcA], target: path.join(work, 'zombie') })],
+  })
+  await zombieState()
+  const revived = await startRun('p12')
+  const zombieAfter = JSON.parse(await fs.readFile(stateFile, 'utf8')).runs.find((r) => r.id === 'pzombie')
+  check(
+    '中断留下的「进行中」记录不再挡住备份，自动标记为失败',
+    revived.data.ok === true && Boolean(zombieAfter) && zombieAfter.status === 'failed' && Boolean(zombieAfter.finishedAt),
+    String(revived.data.run && revived.data.run.status) + ' / zombie=' + String(zombieAfter && zombieAfter.status),
+  )
+
+  // 清空历史时同样不能把僵尸记录当成「正在执行」留下来
+  await zombieState()
+  const cleared = await call('POST', '/dsh-backup/history/clear', {})
+  const afterClear = await call('GET', '/dsh-backup/history')
+  check(
+    '清空历史不会留下僵尸「进行中」记录',
+    cleared.data.ok === true && (afterClear.data.runs || []).length === 0,
+    JSON.stringify((afterClear.data.runs || []).map((r) => r.status)),
+  )
+
 } finally {
   await new Promise((resolve) => server.close(resolve))
   // Windows 上偶发 ENOTEMPTY（杀软/索引器短暂持有），失败不影响结论
