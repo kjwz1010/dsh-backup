@@ -34,7 +34,7 @@
 
 ```bash
 # 从 gitee 装（推荐）
-dsh plugin add https://gitee.com/zhuminming/dsh-backup/repository/archive/master.tar.gz --profile desktop
+dsh plugin add https://gitee.com/kjwz1010/dsh-backup/repository/archive/master.tar.gz --profile desktop
 
 # 本地改代码时用
 dsh plugin add link:D:\AZ\Agent\plugins\dsh-backup --profile desktop
